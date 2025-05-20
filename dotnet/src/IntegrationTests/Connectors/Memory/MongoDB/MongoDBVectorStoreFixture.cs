@@ -2,7 +2,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
+using DotNet.Testcontainers.Containers;
 using Microsoft.Extensions.VectorData;
 using MongoDB.Driver;
 using Testcontainers.MongoDb;
@@ -27,11 +29,13 @@ public class MongoDBVectorStoreFixture : IAsyncLifetime
     public IMongoDatabase MongoDatabase { get; private set; }
 
     /// <summary>Gets the manually created vector store record definition for MongoDB test model.</summary>
-    public VectorStoreRecordDefinition HotelVectorStoreRecordDefinition { get; private set; }
+    public VectorStoreCollectionDefinition HotelVectorStoreRecordDefinition { get; private set; }
 
     public async Task InitializeAsync()
     {
-        await this._container.StartAsync();
+        using CancellationTokenSource cts = new();
+        cts.CancelAfter(TimeSpan.FromSeconds(60));
+        await this._container.StartAsync(cts.Token);
 
         var mongoClient = new MongoClient(new MongoClientSettings
         {
@@ -45,15 +49,15 @@ public class MongoDBVectorStoreFixture : IAsyncLifetime
         {
             Properties =
             [
-                new VectorStoreRecordKeyProperty("HotelId", typeof(string)),
-                new VectorStoreRecordDataProperty("HotelName", typeof(string)),
-                new VectorStoreRecordDataProperty("HotelCode", typeof(int)),
-                new VectorStoreRecordDataProperty("ParkingIncluded", typeof(bool)) { StoragePropertyName = "parking_is_included" },
-                new VectorStoreRecordDataProperty("HotelRating", typeof(float)),
-                new VectorStoreRecordDataProperty("Tags", typeof(List<string>)),
-                new VectorStoreRecordDataProperty("Timestamp", typeof(DateTime)),
-                new VectorStoreRecordDataProperty("Description", typeof(string)),
-                new VectorStoreRecordVectorProperty("DescriptionEmbedding", typeof(ReadOnlyMemory<float>?), 4) { IndexKind = IndexKind.IvfFlat, DistanceFunction = DistanceFunction.CosineSimilarity }
+                new VectorStoreKeyProperty("HotelId", typeof(string)),
+                new VectorStoreDataProperty("HotelName", typeof(string)),
+                new VectorStoreDataProperty("HotelCode", typeof(int)),
+                new VectorStoreDataProperty("ParkingIncluded", typeof(bool)) { StorageName = "parking_is_included" },
+                new VectorStoreDataProperty("HotelRating", typeof(float)),
+                new VectorStoreDataProperty("Tags", typeof(List<string>)),
+                new VectorStoreDataProperty("Timestamp", typeof(DateTime)),
+                new VectorStoreDataProperty("Description", typeof(string)),
+                new VectorStoreVectorProperty("DescriptionEmbedding", typeof(ReadOnlyMemory<float>?), 4) { IndexKind = IndexKind.IvfFlat, DistanceFunction = DistanceFunction.CosineSimilarity }
             ]
         };
 
@@ -65,16 +69,22 @@ public class MongoDBVectorStoreFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        var cursor = await this.MongoDatabase.ListCollectionNamesAsync();
-
-        while (await cursor.MoveNextAsync().ConfigureAwait(false))
+        if (this.MongoDatabase is not null)
         {
-            foreach (var collection in cursor.Current)
+            var cursor = await this.MongoDatabase.ListCollectionNamesAsync();
+
+            while (await cursor.MoveNextAsync().ConfigureAwait(false))
             {
-                await this.MongoDatabase.DropCollectionAsync(collection);
+                foreach (var collection in cursor.Current)
+                {
+                    await this.MongoDatabase.DropCollectionAsync(collection);
+                }
             }
         }
 
-        await this._container.StopAsync();
+        if (this._container is not null && this._container.State == TestcontainersStates.Running)
+        {
+            await this._container.StopAsync();
+        }
     }
 }
